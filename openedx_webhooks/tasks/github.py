@@ -42,12 +42,12 @@ def pull_request_opened_task(_, pull_request, ignore_internal=True, check_contra
 
 def pull_request_opened(pull_request, ignore_internal=True, check_contractor=True):
     """
-    Process a pull request. This is called when a pull request is opened, or
-    when the pull requests of a repo are re-scanned. By default, this function
-    will ignore internal pull requests,
-    and will add a comment to pull requests made by contractors (if if has not yet added
-    a comment). However, this function can be called in such a way that it processes those pull
-    requests anyway.
+    Process a pull request. This is called when a pull request is opened,
+    re-opened, or when the pull requests of a repo are re-scanned. By default,
+    this function will ignore internal pull requests, and will add a comment to
+    pull requests made by contractors (if it has not yet added a comment).
+    However, this function can be called in such a way that it processes those
+    pull requests anyway.
 
     This function must be idempotent. Every time the repositories are re-scanned,
     this function will be called for pull requests that have already been opened.
@@ -88,23 +88,21 @@ def pull_request_opened(pull_request, ignore_internal=True, check_contractor=Tru
         add_comment_to_pull_request(pr, github_contractor_pr_comment(pr))
         return None, True
 
+    synchronize_labels(repo)
+    has_cla = pull_request_has_cla(pr)
+
     issue_key = get_jira_issue_key(pr)
     if issue_key:
         logger.info(f"Already created {issue_key} for PR #{num} against {repo}")
-        return issue_key, False
+    else:
+        # Create an issue on Jira.
+        new_issue = create_ospr_issue(pr)
+        issue_key = new_issue["key"]
+        sentry_extra_context({"new_issue": new_issue})
 
-    synchronize_labels(repo)
-
-    has_cla = pull_request_has_cla(pr)
-
-    # Create an issue on Jira.
-    new_issue = create_ospr_issue(pr)
-    issue_key = new_issue["key"]
-    sentry_extra_context({"new_issue": new_issue})
-
-    # Add a comment to the Github pull request with a link to the JIRA issue.
-    logger.info(f"Commenting on PR #{num} with issue id {issue_key}")
-    add_comment_to_pull_request(pr, github_community_pr_comment(pr, new_issue))
+        # Add a comment to the Github pull request with a link to the JIRA issue.
+        logger.info(f"Commenting on PR #{num} with issue id {issue_key}")
+        add_comment_to_pull_request(pr, github_community_pr_comment(pr, new_issue))
 
     # Add the "Needs Triage" label to the PR.
     logger.info(f"Updating GitHub labels on PR #{num}...")
@@ -116,10 +114,10 @@ def pull_request_opened(pull_request, ignore_internal=True, check_contractor=Tru
     update_labels_on_pull_request(pr, labels)
 
     # If no CLA, move the issue to "Community Manager Review".
-    if not has_cla:
-        transition_jira_issue(issue_key, "Community Manager Review")
+    desired_issue_status = "Needs Triage" if has_cla else "Community Manager Review"
+    transition_jira_issue(issue_key, desired_issue_status)
 
-    logger.info(f"@{user} opened PR #{num} against {repo}, created {issue_key} to track it")
+    logger.info(f"@{user} opened PR #{num} against {repo}, {issue_key} is tracking it.")
     return issue_key, True
 
 
